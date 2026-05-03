@@ -1,88 +1,211 @@
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QTextEdit,
-    QTabWidget, QLabel, QHBoxLayout, QApplication
-)
-from PyQt6.QtCore import Qt
 import json
+import os
 
-from core.device import detect_mode
+from PyQt6.QtWidgets import (
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from gui.sidebar import Sidebar
+from gui.pages.dashboard import DashboardPage
+from gui.pages.details import KeyValuePage, TextDumpPage
+from gui.pages.apps import AppsPage
 from gui.worker import ScanWorker
+
 
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
+
         self.setWindowTitle("DroidScan")
-        self.resize(900, 600)
-
-        layout = QVBoxLayout()
-
-        # Top Bar
-        top_bar = QHBoxLayout()
-        self.status_label = QLabel("Status: Not Connected")
-        self.scan_btn = QPushButton("Scan Device")
-
-        top_bar.addWidget(self.status_label)
-        top_bar.addStretch()
-        top_bar.addWidget(self.scan_btn)
-
-        layout.addLayout(top_bar)
-
-        # Tabs
-        self.tabs = QTabWidget()
-        self.text_areas = {}
-
-        for tab in ["Device", "Hardware", "Apps", "Network", "Security", "Logs"]:
-            text = QTextEdit()
-            text.setReadOnly(True)
-            self.tabs.addTab(text, tab)
-            self.text_areas[tab] = text
-
-        layout.addWidget(self.tabs)
-
-        # Bottom Buttons
-        bottom_bar = QHBoxLayout()
-        self.export_btn = QPushButton("Export JSON")
-        self.clear_btn = QPushButton("Clear")
-
-        bottom_bar.addWidget(self.export_btn)
-        bottom_bar.addWidget(self.clear_btn)
-
-        layout.addLayout(bottom_bar)
-
-        self.setLayout(layout)
-
-        # Events
-        self.scan_btn.clicked.connect(self.scan_device)
-        self.clear_btn.clicked.connect(self.clear_output)
-        self.export_btn.clicked.connect(self.export_json)
+        self.resize(1280, 800)
 
         self.report = {}
+        self.worker = None
 
-        self.check_device()
+        main_layout = QHBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
 
-    def check_device(self):
-        mode = detect_mode()
-        self.status_label.setText(f"Status: {mode}")
+        self.sidebar = Sidebar(self.switch_page)
+        main_layout.addWidget(self.sidebar)
 
-    def scan_device(self):
-        self.status_label.setText("Scanning...")
-        self.worker = ScanWorker()
-        self.worker.finished.connect(self.display_data)
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(16)
+
+        header_card = QFrame()
+        header_card.setObjectName("TopBarCard")
+        top = QHBoxLayout(header_card)
+        top.setContentsMargins(20, 18, 20, 18)
+        top.setSpacing(14)
+
+        self.status = QLabel("Ready")
+        self.status.setObjectName("StatusLabel")
+        self.progress_label = QLabel("Idle")
+        self.progress_label.setObjectName("MutedLabel")
+        title = QLabel("Android Device Scanner")
+        title.setObjectName("HeroTitle")
+        subtitle = QLabel("Run a quick overview or full forensic-style scan from one dashboard.")
+        subtitle.setObjectName("HeroSubtitle")
+
+        title_stack = QVBoxLayout()
+        title_stack.setContentsMargins(0, 0, 0, 0)
+        title_stack.setSpacing(2)
+        title_stack.addWidget(title)
+        title_stack.addWidget(subtitle)
+
+        self.quick_btn = QPushButton("Quick Scan")
+        self.full_btn = QPushButton("Full Scan")
+        self.export_btn = QPushButton("Export")
+        self.export_btn.setObjectName("GhostButton")
+        self.export_btn.setEnabled(False)
+
+        top.addLayout(title_stack, 1)
+        top.addWidget(self.status)
+        top.addWidget(self.progress_label)
+        top.addStretch()
+        top.addWidget(self.quick_btn)
+        top.addWidget(self.full_btn)
+        top.addWidget(self.export_btn)
+
+        right_layout.addWidget(header_card)
+
+        self.quick_btn.clicked.connect(lambda: self.start_scan("quick"))
+        self.full_btn.clicked.connect(lambda: self.start_scan("full"))
+        self.export_btn.clicked.connect(self.export_report)
+
+        self.pages = QStackedWidget()
+        self.pages.setObjectName("ContentStack")
+
+        self.dashboard = DashboardPage()
+        self.device_page = KeyValuePage("Device details", empty_message="Run a scan to load device properties.")
+        self.hardware_page = TextDumpPage("Hardware details", empty_message="Run a scan to inspect CPU, memory, and battery output.")
+        self.apps = AppsPage()
+        self.network_page = TextDumpPage("Network details", empty_message="Full scan data will appear here.")
+        self.security_page = KeyValuePage("Security details", empty_message="Full scan data will appear here.")
+        self.logs_page = TextDumpPage("Logs", empty_message="Full scan data will appear here.", monospace=True)
+
+        self.page_map = {
+            "Dashboard": self.dashboard,
+            "Device": self.device_page,
+            "Hardware": self.hardware_page,
+            "Apps": self.apps,
+            "Network": self.network_page,
+            "Security": self.security_page,
+            "Logs": self.logs_page,
+        }
+
+        for page in self.page_map.values():
+            self.pages.addWidget(page)
+
+        right_layout.addWidget(self.pages)
+        right_layout.setStretchFactor(self.pages, 1)
+
+        main_layout.addLayout(right_layout)
+        main_layout.setStretchFactor(right_layout, 1)
+        self.setLayout(main_layout)
+
+        self.switch_page("Dashboard")
+        self.load_cached_report()
+
+    def switch_page(self, name):
+        page = self.page_map.get(name, self.dashboard)
+        self.pages.setCurrentWidget(page)
+        self.sidebar.set_active(name)
+
+    def start_scan(self, mode):
+        if self.worker and self.worker.isRunning():
+            return
+
+        self.quick_btn.setEnabled(False)
+        self.full_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+        self.status.setText("Scanning...")
+        self.progress_label.setText("Starting...")
+
+        self.worker = ScanWorker(mode)
+        self.worker.finished.connect(self.update_ui)
+        self.worker.progress.connect(self.update_progress)
+        self.worker.error.connect(self.handle_scan_error)
         self.worker.start()
 
-    def display_data(self, data):
+    def update_progress(self, text):
+        self.progress_label.setText(f"Scanning: {text}")
+
+    def update_ui(self, data):
         self.report = data
-        self.status_label.setText("Scan Complete")
+        self.status.setText("Done")
+        self.progress_label.setText("Completed")
+        self.quick_btn.setEnabled(True)
+        self.full_btn.setEnabled(True)
+        self.export_btn.setEnabled(True)
 
-        for key, value in data.items():
-            if key in self.text_areas:
-                formatted = json.dumps(value, indent=2)
-                self.text_areas[key].setText(formatted)
+        self.dashboard.update_data(data)
+        self.device_page.update_data(data.get("Device", {}))
+        self.hardware_page.update_data(data.get("Hardware", {}))
+        self.apps.update_data(data)
+        self.network_page.update_data(data.get("Network", {}))
+        self.security_page.update_data(data.get("Security", {}))
+        self.logs_page.update_data(data.get("Logs", {}))
 
-    def clear_output(self):
-        for text in self.text_areas.values():
-            text.clear()
+    def export_report(self):
+        if not self.report:
+            self.status.setText("No data to export")
+            return
 
-    def export_json(self):
-        with open("report.json", "w") as f:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export report",
+            os.path.abspath("report.json"),
+            "JSON Files (*.json)",
+        )
+        if not path:
+            self.status.setText("Export cancelled")
+            return
+
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(self.report, f, indent=4)
+
+        txt_path = os.path.splitext(path)[0] + ".txt"
+        with open(txt_path, "w", encoding="utf-8") as f:
+            for section, data in self.report.items():
+                f.write(f"=== {section} ===\n{data}\n\n")
+
+        self.status.setText("Exported JSON + TXT")
+
+    def handle_scan_error(self, message):
+        self.status.setText("Scan failed")
+        self.progress_label.setText(message)
+        self.quick_btn.setEnabled(True)
+        self.full_btn.setEnabled(True)
+        self.export_btn.setEnabled(bool(self.report))
+
+    def load_cached_report(self):
+        report_path = os.path.abspath("report.json")
+        if not os.path.exists(report_path):
+            return
+
+        try:
+            with open(report_path, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+
+        self.report = cached
+        self.status.setText("Loaded report")
+        self.progress_label.setText("Showing cached data")
+        self.export_btn.setEnabled(True)
+        self.dashboard.update_data(cached)
+        self.device_page.update_data(cached.get("Device", {}))
+        self.hardware_page.update_data(cached.get("Hardware", {}))
+        self.apps.update_data(cached)
+        self.network_page.update_data(cached.get("Network", {}))
+        self.security_page.update_data(cached.get("Security", {}))
+        self.logs_page.update_data(cached.get("Logs", {}))
