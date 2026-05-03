@@ -27,15 +27,15 @@ class ScanWorker(QThread):
             self.progress.emit("Hardware")
             report["Hardware"] = get_hardware_info()
 
+            self.progress.emit("Security")
+            report["Security"] = get_security_info()
+
             if self.mode == "full":
                 self.progress.emit("Apps")
                 report["Apps"] = get_apps()
 
                 self.progress.emit("Network")
                 report["Network"] = get_network_info()
-
-                self.progress.emit("Security")
-                report["Security"] = get_security_info()
 
                 self.progress.emit("Logs")
                 report["Logs"] = get_logs()

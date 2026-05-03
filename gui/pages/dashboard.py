@@ -3,6 +3,26 @@ from PyQt6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
 from gui.components.card import Card
 
 
+def _parse_battery_level(raw_text):
+    for line in str(raw_text).splitlines():
+        if "level:" in line:
+            return line.split(":", 1)[1].strip() + "%"
+    return "-"
+
+
+def _bootloader_label(security):
+    state = str(security.get("Bootloader State", "")).strip().lower()
+    flash_lock = str(security.get("Flash Lock", "")).strip()
+
+    if state in {"locked", "unlocked"}:
+        return state.title()
+    if flash_lock == "1":
+        return "Locked"
+    if flash_lock == "0":
+        return "Unlocked"
+    return "-"
+
+
 class DashboardPage(QWidget):
     def __init__(self):
         super().__init__()
@@ -33,6 +53,7 @@ class DashboardPage(QWidget):
 
         device = data.get("Device", {})
         apps = data.get("Apps", {})
+        hardware = data.get("Hardware", {})
         security = data.get("Security", {})
         network = data.get("Network", {})
 
@@ -40,7 +61,13 @@ class DashboardPage(QWidget):
             ("Model", device.get("Model", "-")),
             ("Android", device.get("Android Version", "-")),
             ("Brand", device.get("Brand", "-")),
+            ("Security Patch", device.get("Security Patch", "-")),
+            ("Build Type", device.get("Build Type", "-")),
             ("Serial", device.get("Serial", "-")),
+            ("Bootloader", _bootloader_label(security)),
+            ("Verified Boot", security.get("Verified Boot", "-") if security else "-"),
+            ("Encryption", security.get("Encryption", "-") if security else "-"),
+            ("Battery", _parse_battery_level(hardware.get("Battery", "")) if hardware else "-"),
             ("User Apps", len(apps.get("User Apps", [])) if apps else 0),
             ("SELinux", security.get("SELinux", "-") if security else "-"),
         ]

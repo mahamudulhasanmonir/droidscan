@@ -16,6 +16,8 @@ from gui.sidebar import Sidebar
 from gui.pages.dashboard import DashboardPage
 from gui.pages.details import KeyValuePage, TextDumpPage
 from gui.pages.apps import AppsPage
+from gui.pages.tools import ToolsPage
+from gui.tool_worker import ToolWorker
 from gui.worker import ScanWorker
 
 
@@ -91,6 +93,7 @@ class MainWindow(QWidget):
         self.network_page = TextDumpPage("Network details", empty_message="Full scan data will appear here.")
         self.security_page = KeyValuePage("Security details", empty_message="Full scan data will appear here.")
         self.logs_page = TextDumpPage("Logs", empty_message="Full scan data will appear here.", monospace=True)
+        self.tools_page = ToolsPage(self.run_tool_action)
 
         self.page_map = {
             "Dashboard": self.dashboard,
@@ -100,6 +103,7 @@ class MainWindow(QWidget):
             "Network": self.network_page,
             "Security": self.security_page,
             "Logs": self.logs_page,
+            "Tools": self.tools_page,
         }
 
         for page in self.page_map.values():
@@ -154,6 +158,7 @@ class MainWindow(QWidget):
         self.network_page.update_data(data.get("Network", {}))
         self.security_page.update_data(data.get("Security", {}))
         self.logs_page.update_data(data.get("Logs", {}))
+        self.tools_page.set_status("Scan complete. Tools are ready.")
 
     def export_report(self):
         if not self.report:
@@ -209,3 +214,30 @@ class MainWindow(QWidget):
         self.network_page.update_data(cached.get("Network", {}))
         self.security_page.update_data(cached.get("Security", {}))
         self.logs_page.update_data(cached.get("Logs", {}))
+        self.tools_page.set_status("Cached report loaded. Tools are ready.")
+
+    def run_tool_action(self, action):
+        if hasattr(self, "tool_worker") and self.tool_worker and self.tool_worker.isRunning():
+            return
+
+        self.status.setText("Running tool...")
+        self.progress_label.setText(action.replace("_", " ").title())
+        self.tools_page.set_busy(True)
+        self.tools_page.set_status("Running selected tool...")
+
+        self.tool_worker = ToolWorker(action)
+        self.tool_worker.finished.connect(self.handle_tool_result)
+        self.tool_worker.error.connect(self.handle_tool_error)
+        self.tool_worker.start()
+
+    def handle_tool_result(self, action, result):
+        self.status.setText("Tool completed")
+        self.progress_label.setText("Idle")
+        self.tools_page.set_busy(False)
+        self.tools_page.show_result(action.replace("_", " ").title(), result)
+
+    def handle_tool_error(self, message):
+        self.status.setText("Tool failed")
+        self.progress_label.setText("Idle")
+        self.tools_page.set_busy(False)
+        self.tools_page.show_result("Tool error", message)

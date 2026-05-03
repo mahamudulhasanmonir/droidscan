@@ -25,7 +25,8 @@ class Sidebar(QWidget):
             "Apps",
             "Network",
             "Security",
-            "Logs"
+            "Logs",
+            "Tools",
         ]
 
         for name in buttons:
